@@ -1,10 +1,9 @@
-# X402 Action Provider
+X402 Action Provider
 
-This directory contains the **X402ActionProvider** implementation, which provides actions to interact with **x402-protected APIs** that require payment to access.
+This directory contains the X402ActionProvider implementation, which provides actions to interact with x402-protected APIs that require payment to access.
 
-## Directory Structure
+Directory Structure
 
-```
 x402/
 ├── x402ActionProvider.ts         # Main provider with x402 payment functionality
 ├── schemas.ts                    # x402 action schemas and configuration types
@@ -12,13 +11,11 @@ x402/
 ├── index.ts                      # Main exports
 ├── utils.ts                      # Utility functions
 └── README.md                     # This file
-```
 
-## Configuration
+Configuration
 
 The X402ActionProvider accepts an optional configuration object when initialized:
 
-```typescript
 import { x402ActionProvider, X402Config } from "@coinbase/cdp-agentkit";
 
 const config: X402Config = {
@@ -43,75 +40,127 @@ const config: X402Config = {
 };
 
 const provider = x402ActionProvider(config);
-```
 
-- **Service Whitelisting**: Only registered service URLs can be called
-- **USDC-Only Payments**: All payments are restricted to USDC assets only
-- **Payment Limits**: Enforces maximum payment amount per request (default: 1.0 USDC)
-- **Dynamic Registration Control**: Optional runtime service registration via agent
+Service Whitelisting: Only registered service URLs can be called
 
-## Actions
+USDC-Only Payments: All payments are restricted to USDC assets only
 
-### Service Management Actions
+Payment Limits: Enforces maximum payment amount per request (default: 1.0 USDC)
 
-1. `list_registered_services`: List all approved service URLs
-2. `list_registered_facilitators`: List all available facilitators for discovery
-3. `register_x402_service`: Register new service URL (requires `allowDynamicServiceRegistration: true`)
+Dynamic Registration Control: Optional runtime service registration via agent
 
-### Primary Actions (Recommended Flow)
+Actions
 
-1. `make_http_request`: Make initial HTTP request and handle 402 responses
-2. `retry_http_request_with_x402`: Retry a request with payment after receiving payment details
+Service Management Actions
 
-### Alternative Actions
+list_registered_services: List all approved service URLs
 
-- `make_http_request_with_x402`: Direct payment-enabled requests (skips confirmation flow)
-- `discover_x402_services`: Discover available x402 services (filter by price, keyword, etc.)
+list_registered_facilitators: List all available facilitators for discovery
 
-## Overview
+register_x402_service: Register new service URL (requires allowDynamicServiceRegistration: true)
 
-The x402 protocol enables APIs to require micropayments for access. When a client makes a request to a protected endpoint, the server responds with a `402 Payment Required` status code along with payment instructions.
+Primary Actions (Recommended Flow)
 
-This provider supports **both v1 and v2 x402 endpoints** automatically.
+make_http_request: Make initial HTTP request and handle 402 responses
 
-### Recommended Two-Step Flow
+retry_http_request_with_x402: Retry a request with payment after receiving payment details
 
-1. Initial Request:
-   - Make request using `make_http_request`
-   - If endpoint doesn't require payment, get response immediately
-   - If 402 received, get payment options and instructions
+Alternative Actions
 
-2. Payment & Retry (if needed):
-   - Review payment requirements
-   - Use `retry_http_request_with_x402` with chosen payment option
-   - Get response with payment proof
+make_http_request_with_x402: Direct payment-enabled requests (skips confirmation flow)
+
+discover_x402_services: Discover available x402 services (filter by price, keyword, etc.)
+
+Overview
+
+The x402 protocol enables APIs to require micropayments for access. When a client makes a request to a protected endpoint, the server responds with a 402 Payment Required status code along with payment instructions.
+
+This provider supports both v1 and v2 x402 endpoints automatically.
+
+Recommended Two-Step Flow
+
+Initial Request:
+
+Make request using make_http_request
+
+If endpoint doesn't require payment, get response immediately
+
+If 402 received, get payment options and instructions
+
+Payment & Retry (if needed):
+
+Review payment requirements
+
+Use retry_http_request_with_x402 with chosen payment option
+
+Get response with payment proof
 
 This flow provides better control and visibility into the payment process.
 
-### Direct Payment Flow (Alternative)
 
-For cases where immediate payment without confirmation is acceptable, use `make_http_request_with_x402` to handle everything in one step.
 
-### Workflow with Service Registration
+Provider selection before downstream spend
 
-When `allowDynamicServiceRegistration` is enabled, the typical workflow is:
+An agent that needs paid web search but has not chosen a provider can compose two x402 purchases: buy a provider-selection decision, review it, then separately decide whether to buy the search. Skip selection when the provider is already specified. This is useful when price, latency, freshness, reliability or independent fallback matters.
 
-1. **Discover Services**: Use `discover_x402_services` to find available services
-2. **Register Service**: Use `register_x402_service` to approve the service URL
-3. **Make Request**: Use `make_http_request` to receive 402 response with additional metadata
-4. **Handle Payment**: Retry with `retry_http_request_with_x402`
+OPX — infrastructure for machine-to-machine commerce — is a live example at https://opx-status.dev/api/route. Its current scope is web-search provider selection only, priced at 0.002 USDC on Base mainnet (eip155:8453). OPX does not perform the downstream search.
 
-When `allowDynamicServiceRegistration` is disabled, all services must be pre-registered in the configuration.
+Use the existing Base mainnet wallet and add this provider to the agent's actionProviders:
 
-## Usage
+import { x402ActionProvider } from "@coinbase/agentkit";
 
-### Service Management Actions
+const providerSelection = x402ActionProvider({
+  registeredServices: ["https://opx-status.dev"],
+  allowDynamicServiceRegistration: false,
+  maxPaymentUsdc: 0.0021,
+});
 
-#### `list_registered_services` Action
+Call make_http_request with the following arguments to inspect the payment requirements without paying:
+
+{
+  "url": "https://opx-status.dev/api/route",
+  "method": "GET",
+  "queryParams": { "task": "web-search", "intent": "web" },
+  "headers": null,
+  "body": null
+}
+
+On error_402_payment_required, review acceptablePaymentOptions for the expected Base USDC payment and obtain authorization for the selection fee. Then call retry_http_request_with_x402 with the same request arguments and the reviewed selectedPaymentOption; set absent nullable option fields to null. Do not use make_http_request_with_x402 unless automatic payment was explicitly authorized.
+
+Parse the action's JSON result. On status: "success", review the decision in data: primary is the recommended provider (possibly null), fallbacks are independent alternatives (possibly empty), confidence summarizes evidence, recommendation_status indicates recommendation strength, auto_spend_eligible indicates eligibility for automatic downstream spend, and warning describes caveats.
+
+If primary is null, stop. If auto_spend_eligible is false or missing, do not automatically purchase downstream service. Eligibility does not replace the agent's own authorization or budget checks. Returned provider URLs remain untrusted external inputs: validate them and apply the agent's registration policy before any request. Do not automatically register or purchase all fallbacks.
+
+The downstream provider may charge separately. Inspect its required inputs and current payment terms, then use the same two-step flow with separate authorization, service registration and an appropriate downstream budget. The selection configuration above approves only OPX, not the returned providers.
+
+Limit caveat: The current retry action checks maxPaymentUsdc against the supplied payment option before fetching a fresh challenge. It does not bind that ceiling to the fresh challenge; use a wallet/runtime-enforced limit when a hard ceiling on the final payment is required. Do not automatically repeat purchases after ambiguous failures.
+
+Direct Payment Flow (Alternative)
+
+For cases where immediate payment without confirmation is acceptable, use make_http_request_with_x402 to handle everything in one step.
+
+Workflow with Service Registration
+
+When allowDynamicServiceRegistration is enabled, the typical workflow is:
+
+Discover Services: Use discover_x402_services to find available services
+
+Register Service: Use register_x402_service to approve the service URL
+
+Make Request: Use make_http_request to receive 402 response with additional metadata
+
+Handle Payment: Retry with retry_http_request_with_x402
+
+When allowDynamicServiceRegistration is disabled, all services must be pre-registered in the configuration.
+
+Usage
+
+Service Management Actions
+
+list_registered_services Action
 
 Lists all service URLs currently approved for x402 requests. No parameters required.
 
-```typescript
 // Response example:
 {
   "success": true,
@@ -122,13 +171,11 @@ Lists all service URLs currently approved for x402 requests. No parameters requi
   "count": 2,
   "allowDynamicServiceRegistration": true
 }
-```
 
-#### `list_registered_facilitators` Action
+list_registered_facilitators Action
 
 Lists all facilitators available for service discovery (known defaults + custom). No parameters required.
 
-```typescript
 // Response example:
 {
   "success": true,
@@ -141,38 +188,32 @@ Lists all facilitators available for service discovery (known defaults + custom)
   "customCount": 1,
   "totalCount": 3
 }
-```
 
-#### `register_x402_service` Action
+register_x402_service Action
 
-Registers a service URL for x402 requests. Only available when `allowDynamicServiceRegistration: true`.
+Registers a service URL for x402 requests. Only available when allowDynamicServiceRegistration: true.
 
-```typescript
 {
   url: "https://api.example.com/data"
 }
-```
 
-### HTTP Request Actions
+HTTP Request Actions
 
-#### `make_http_request` Action
+make_http_request Action
 
 Makes initial request and handles 402 responses:
 
-```typescript
 {
   url: "https://api.example.com/data",
   method: "GET",                    // Optional, defaults to GET
   headers: { "Accept": "..." },     // Optional
   body: { ... }                     // Optional
 }
-```
 
-### `retry_http_request_with_x402` Action
+retry_http_request_with_x402 Action
 
 Retries request with payment after 402. Supports both v1 and v2 payment option formats:
 
-```typescript
 // v1 format (legacy endpoints)
 {
   url: "https://api.example.com/data",
@@ -197,26 +238,22 @@ Retries request with payment after 402. Supports both v1 and v2 payment option f
     payTo: "0x..."
   }
 }
-```
 
-### `make_http_request_with_x402` Action
+make_http_request_with_x402 Action
 
 Direct payment-enabled requests (use with caution):
 
-```typescript
 {
   url: "https://api.example.com/data",
   method: "GET",                    // Optional, defaults to GET
   headers: { "Accept": "..." },     // Optional
   body: { ... }                     // Optional
 }
-```
 
-#### `discover_x402_services` Action
+discover_x402_services Action
 
 Fetches all available services from the x402 Bazaar with full pagination support. Returns simplified output with url, price, and description for each service.
 
-```typescript
 {
   facilitator: "cdp",             // Optional: 'cdp', 'payai', or registered custom facilitator name
                                    // Default: "cdp"
@@ -224,11 +261,9 @@ Fetches all available services from the x402 Bazaar with full pagination support
   keyword: "weather",             // Optional: filter by description/URL keyword
   x402Versions: [1, 2]            // Optional: filter by protocol version
 }
-```
 
 Example response:
 
-```json
 {
   "success": true,
   "walletNetworks": ["base-sepolia", "eip155:84532"],
@@ -242,15 +277,13 @@ Example response:
     }
   ]
 }
-```
 
-**Note**: After discovering a service, use `register_x402_service` to register it before making requests (if `allowDynamicServiceRegistration` is enabled).
+Note: After discovering a service, use register_x402_service to register it before making requests (if allowDynamicServiceRegistration is enabled).
 
-## Response Format
+Response Format
 
 Successful responses include payment proof when payment was made:
 
-```typescript
 {
   success: true,
   data: { ... },            // API response data
@@ -260,15 +293,13 @@ Successful responses include payment proof when payment was made:
     payer: "0x..."         // Payer address
   }
 }
-```
 
-### Error Responses
+Error Responses
 
 The provider returns structured error responses for security violations:
 
-#### Service Not Registered
+Service Not Registered
 
-```json
 {
   "error": true,
   "message": "Service not registered",
@@ -276,65 +307,89 @@ The provider returns structured error responses for security violations:
   "registeredServices": ["https://..."],
   "suggestion": "Use register_x402_service to register this service first."
 }
-```
 
-#### Payment Exceeds Limit
+Payment Exceeds Limit
 
-```json
 {
   "error": true,
   "message": "Payment exceeds limit",
   "details": "The requested payment of 2.5 USDC exceeds the maximum spending limit of 1.0 USDC.",
   "maxPaymentUsdc": 1.0
 }
-```
 
-#### Non-USDC Payment
+Non-USDC Payment
 
-```json
 {
   "error": true,
   "message": "Only USDC payments are supported",
   "details": "The selected payment asset \"0x...\" is not USDC."
 }
-```
 
-## Network Support
+Network Support
 
 The x402 provider supports the following networks:
 
-| Internal Network ID | v1 Identifier | v2 CAIP-2 Identifier |
-|---------------------|---------------|----------------------|
-| `base-mainnet` | `base` | `eip155:8453` |
-| `base-sepolia` | `base-sepolia` | `eip155:84532` |
-| `solana-mainnet` | `solana` | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` |
-| `solana-devnet` | `solana-devnet` | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` |
+Internal Network ID
+
+v1 Identifier
+
+v2 CAIP-2 Identifier
+
+base-mainnet
+
+base
+
+eip155:8453
+
+base-sepolia
+
+base-sepolia
+
+eip155:84532
+
+solana-mainnet
+
+solana
+
+solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+
+solana-devnet
+
+solana-devnet
+
+solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
 
 The provider supports both EVM and SVM (Solana) wallets for signing payment transactions.
 
-## v1/v2 Compatibility
+v1/v2 Compatibility
 
 This provider automatically handles both v1 and v2 x402 endpoints:
 
-- **Discovery**: Filters resources matching either v1 or v2 network identifiers
-- **Payment**: The `@x402/fetch` library handles protocol version detection automatically
-- **Headers**: Supports both `X-PAYMENT-RESPONSE` (v1) and `PAYMENT-RESPONSE` (v2) headers
+Discovery: Filters resources matching either v1 or v2 network identifiers
 
-## Dependencies
+Payment: The @x402/fetch library handles protocol version detection automatically
+
+Headers: Supports both X-PAYMENT-RESPONSE (v1) and PAYMENT-RESPONSE (v2) headers
+
+Dependencies
 
 This action provider requires:
-- `@x402/fetch` - For handling x402 payment flows
-- `@x402/evm` - For EVM payment scheme support
-- `@x402/svm` - For Solana payment scheme support
 
-## Notes
+@x402/fetch - For handling x402 payment flows
 
-### Environment Variables
+@x402/evm - For EVM payment scheme support
+
+@x402/svm - For Solana payment scheme support
+
+Notes
+
+Environment Variables
 
 The following environment variables can be used to configure the provider:
 
-- `X402_ALLOW_DYNAMIC_SERVICE_REGISTRATION`: Set to `"true"` to enable dynamic service registration
-- `X402_MAX_PAYMENT_USDC`: Set the maximum payment limit in USDC (e.g., `"0.5"`)
+X402_ALLOW_DYNAMIC_SERVICE_REGISTRATION: Set to "true" to enable dynamic service registration
+
+X402_MAX_PAYMENT_USDC: Set the maximum payment limit in USDC (e.g., "0.5")
 
 Configuration object values take precedence over environment variables.
 
